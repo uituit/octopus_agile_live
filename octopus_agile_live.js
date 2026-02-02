@@ -73,7 +73,7 @@ if (!prices) {
 
 function renderSmallWidget(widget, currentSlot, nextSlot, now) {
   // Closer to left boundary
-  widget.setPadding(6, 2, 6, 2);
+  widget.setPadding(12, -32, 6, 6);
 
   let mainStack = widget.addStack();
   mainStack.layoutVertically();
@@ -281,6 +281,37 @@ function drawChart(data, min, max) {
   // 1. Force Y-axis to start at 0 if min > 0
   if (min > 0) min = 0;
 
+  // Calculate Average for Peak Detection
+  let avg = data.reduce((a, b) => a + b.value_inc_vat, 0) / data.length;
+  // Define Peak Threshold: Midpoint between Avg and Max
+  // Any contiguous block around the max price above this threshold is "Peak"
+  let peakThreshold = (max + avg) / 2;
+
+  let maxVal = -Infinity;
+  let maxIdx = -1;
+  // Find index of absolute max price
+  for (let i = 0; i < data.length; i++) {
+    if (data[i].value_inc_vat > maxVal) {
+      maxVal = data[i].value_inc_vat;
+      maxIdx = i;
+    }
+  }
+
+  // Expand outwards from maxIdx to find start/end of peak block
+  let peakStartIdx = maxIdx;
+  let peakEndIdx = maxIdx;
+
+  if (peakThreshold < max) { // Only calculate if there is variance
+    // Move left
+    while (peakStartIdx > 0 && data[peakStartIdx - 1].value_inc_vat >= peakThreshold) {
+      peakStartIdx--;
+    }
+    // Move right
+    while (peakEndIdx < data.length - 1 && data[peakEndIdx + 1].value_inc_vat >= peakThreshold) {
+      peakEndIdx++;
+    }
+  }
+
   let w = 600;
   let h = 300;
   let ctx = new DrawContext();
@@ -327,10 +358,6 @@ function drawChart(data, min, max) {
   let path = new Path();
   let first = true;
 
-  // Find indices for 16:00 and 19:00
-  let idx16 = -1;
-  let idx19 = -1;
-
   for (let i = 0; i < data.length; i++) {
     let pt = new Point(getX(i), getY(data[i].value_inc_vat));
     if (first) {
@@ -339,16 +366,6 @@ function drawChart(data, min, max) {
     } else {
       path.addLine(pt);
     }
-
-    // Check time for 16:00 and 19:00
-    let d = new Date(data[i].valid_from);
-    let hStr = d.getHours();
-    let mStr = d.getMinutes();
-    if (hStr === 16 && mStr === 0) idx16 = i;
-    if (hStr === 19 && mStr === 0) idx19 = i;
-    // Fallback if exact 00 min not found (unlikely for Agile but good practice), pick first slot of hour
-    if (idx16 === -1 && hStr === 16) idx16 = i;
-    if (idx19 === -1 && hStr === 19) idx19 = i;
   }
 
   ctx.addPath(path);
@@ -371,7 +388,7 @@ function drawChart(data, min, max) {
     }
   }
 
-  // Draw Peak Time Lines (16:00 - 19:00)
+  // Draw Peak Time Lines (Adaptive)
   // Helper to draw dashed line
   const drawDashedLine = (x) => {
     let dashHeight = 5;
@@ -392,8 +409,20 @@ function drawChart(data, min, max) {
   ctx.setStrokeColor(new Color("#FF0000", 0.5)); // Reddish for peak, semi-transparent
   ctx.setLineWidth(1);
 
-  if (idx16 !== -1) drawDashedLine(getX(idx16));
-  if (idx19 !== -1) drawDashedLine(getX(idx19));
+  // Draw lines at start and end of peak block
+  // Start line: Start of the first peak slot (at peakStartIdx)
+  // End line: End of the last peak slot (at peakEndIdx + 1)
+  if (peakStartIdx !== -1 && peakStartIdx !== peakEndIdx) {
+    drawDashedLine(getX(peakStartIdx));
+    // Ensure we don't draw outside the graph if peak is at the very end
+    if (peakEndIdx + 1 < data.length) {
+      drawDashedLine(getX(peakEndIdx + 1));
+    } else {
+      // If it's the very last slot, draw at the edge
+      drawDashedLine(w - padRight);
+    }
+  }
+
 
   ctx.strokePath();
 
@@ -416,11 +445,22 @@ function drawChart(data, min, max) {
     ctx.drawText(tEnd, new Point(w - padRight - 50, yLabelPos));
 
     // Peak Labels
-    if (idx16 !== -1) {
-      ctx.drawText("16:00", new Point(getX(idx16) - 20, yLabelPos));
-    }
-    if (idx19 !== -1) {
-      ctx.drawText("19:00", new Point(getX(idx19) - 20, yLabelPos));
+    if (peakStartIdx !== -1 && peakStartIdx !== peakEndIdx) {
+      let startTime = formatTime(data[peakStartIdx].valid_from);
+      // Use valid_to for the end time label (e.g. 19:00 instead of 18:30)
+      let endTime = formatTime(data[peakEndIdx].valid_to);
+
+      // Simple collision avoidance with start/end labels
+      // If peak is too close to start/end, don't draw label or offset it
+      // For simplicity, we just draw them at the x position
+      ctx.drawText(startTime, new Point(getX(peakStartIdx) - 20, yLabelPos));
+
+      // Draw peak end label
+      if (peakEndIdx + 1 < data.length) {
+        ctx.drawText(endTime, new Point(getX(peakEndIdx + 1) - 20, yLabelPos));
+      } else {
+        ctx.drawText(endTime, new Point(w - padRight - 30, yLabelPos));
+      }
     }
   }
 
