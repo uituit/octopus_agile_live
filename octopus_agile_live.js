@@ -276,7 +276,7 @@ function renderLargeWidget(widget, currentSlot, nextSlot, minPrice, maxPrice, av
   let chart = graphStack.addImage(chartImg);
   chart.applyFillingContentMode();
 
-  widget.addSpacer(4);
+  widget.addSpacer(2);
 
   // Footer
   let df = new DateFormatter();
