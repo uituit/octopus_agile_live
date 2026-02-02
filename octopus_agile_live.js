@@ -62,7 +62,7 @@ if (!prices) {
   } else if (family === "medium") {
     renderMediumWidget(widget, currentSlot, nextSlot, minPrice, maxPrice, avgPrice, lowSlot, peakSlot);
   } else if (family === "large") {
-    renderLargeWidget(widget, currentSlot, nextSlot, minPrice, maxPrice, avgPrice, lowSlot, peakSlot, todayPrices);
+    renderLargeWidget(widget, currentSlot, nextSlot, minPrice, maxPrice, avgPrice, lowSlot, peakSlot, todayPrices, now);
   } else {
     // Default to medium for other sizes or unknown
     renderMediumWidget(widget, currentSlot, nextSlot, minPrice, maxPrice, avgPrice, lowSlot, peakSlot);
@@ -199,7 +199,7 @@ function renderMediumWidget(widget, currentSlot, nextSlot, minPrice, maxPrice, a
   footer.textOpacity = 0.4;
 }
 
-function renderLargeWidget(widget, currentSlot, nextSlot, minPrice, maxPrice, avgPrice, lowSlot, peakSlot, todayPrices) {
+function renderLargeWidget(widget, currentSlot, nextSlot, minPrice, maxPrice, avgPrice, lowSlot, peakSlot, todayPrices, now) {
   widget.setPadding(15, 15, 15, 15);
 
   // Top Half: Reuse Medium Logic structure manually
@@ -259,7 +259,7 @@ function renderLargeWidget(widget, currentSlot, nextSlot, minPrice, maxPrice, av
   rightCol.addSpacer(8);
   addStatRow(rightCol, "AVG", avgPrice, "Today");
 
-  widget.addSpacer(10);
+  widget.addSpacer(4);
 
   // Bottom Half: Graph
   let graphStack = widget.addStack();
@@ -275,6 +275,17 @@ function renderLargeWidget(widget, currentSlot, nextSlot, minPrice, maxPrice, av
   let chartImg = drawChart(todayPrices, minPrice, maxPrice);
   let chart = graphStack.addImage(chartImg);
   chart.applyFillingContentMode();
+
+  widget.addSpacer(4);
+
+  // Footer
+  let df = new DateFormatter();
+  df.dateFormat = "HH:mm:ss";
+  let footer = widget.addText(`Last updated: ${df.string(now)}`);
+  footer.font = Font.systemFont(8);
+  footer.textColor = Color.lightGray();
+  footer.centerAlignText();
+  footer.textOpacity = 0.4;
 }
 
 function drawChart(data, min, max) {
