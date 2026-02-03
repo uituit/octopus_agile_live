@@ -8,7 +8,8 @@ const API_URL = `https://api.octopus.energy/v1/products/${PRODUCT_CODE}/electric
 
 async function getPrices() {
   try {
-    let req = new Request(API_URL);
+    // Add cache busting query param
+    let req = new Request(API_URL + "?t=" + Date.now());
     let res = await req.loadJSON();
     return res.results;
   } catch (e) { return null; }
@@ -330,7 +331,7 @@ function drawChart(data, min, max) {
   ctx.opaque = false;
 
   // Padding
-  let padLeft = 40;
+  let padLeft = 60; // Increased for larger 16pt font
   let padRight = 20;
   let padTop = 20;
   let padBottom = 30;
@@ -362,7 +363,9 @@ function drawChart(data, min, max) {
   let yRange = max - min;
   if (yRange === 0) yRange = 1;
 
-  let getX = (index) => padLeft + (index / (data.length - 1)) * graphW;
+  // Use fixed 48 slots (00:00 to 23:30) for X-axis to ensure valid_from to 23:30 coverage
+  let totalSlots = 48; // 30-min slots in 24h
+  let getX = (slotIndex) => padLeft + (slotIndex / (totalSlots - 1)) * graphW;
   let getY = (val) => h - padBottom - ((val - min) / yRange) * graphH;
 
   // Draw Line
@@ -370,7 +373,14 @@ function drawChart(data, min, max) {
   let first = true;
 
   for (let i = 0; i < data.length; i++) {
-    let pt = new Point(getX(i), getY(data[i].value_inc_vat));
+    // Calculate slot index based on time 00:00 - 23:30
+    let d = new Date(data[i].valid_from);
+    let slotIndex = d.getHours() * 2 + (d.getMinutes() >= 30 ? 1 : 0);
+
+    // Ensure we don't go out of bounds if data has weird times, though Agile is standard
+    if (slotIndex >= totalSlots) slotIndex = totalSlots - 1;
+
+    let pt = new Point(getX(slotIndex), getY(data[i].value_inc_vat));
     if (first) {
       path.move(pt);
       first = false;
@@ -417,58 +427,101 @@ function drawChart(data, min, max) {
     ctx.addPath(dashPath);
   };
 
-  ctx.setStrokeColor(new Color("#FF0000", 0.5)); // Reddish for peak, semi-transparent
+  // Peak Line Style
+  ctx.setStrokeColor(new Color("#FF5555", 0.9)); // Brighter red, more opaque for better visibility
   ctx.setLineWidth(1);
 
   // Draw lines at start and end of peak block
   // Start line: Start of the first peak slot (at peakStartIdx)
   // End line: End of the last peak slot (at peakEndIdx + 1)
   if (peakStartIdx !== -1 && peakStartIdx !== peakEndIdx) {
-    drawDashedLine(getX(peakStartIdx));
-    // Ensure we don't draw outside the graph if peak is at the very end
-    if (peakEndIdx + 1 < data.length) {
-      drawDashedLine(getX(peakEndIdx + 1));
-    } else {
-      // If it's the very last slot, draw at the edge
+    let startD = new Date(data[peakStartIdx].valid_from);
+    let startSlot = startD.getHours() * 2 + (startD.getMinutes() >= 30 ? 1 : 0);
+
+    let endD = new Date(data[peakEndIdx].valid_to); // Use valid_to for end line
+    // If valid_to is 00:00 next day, it's slot 48 (which is right edge)
+    // d.getHours() of 00:00 is 0.
+    // We need to handle 00:00 specifically? 
+    // Usually valid_to 19:00 means 38 slots.
+    let endSlot = endD.getHours() * 2 + (endD.getMinutes() >= 30 ? 1 : 0);
+    if (endSlot === 0 && endD.getDate() !== startD.getDate()) endSlot = 48; // Next day midnight
+
+    drawDashedLine(getX(startSlot));
+    // Check bounds
+    if (endSlot >= totalSlots) {
       drawDashedLine(w - padRight);
+    } else {
+      drawDashedLine(getX(endSlot));
     }
   }
 
 
   ctx.strokePath();
 
+  // Draw Average Line
+  let avgY = getY(avg);
+  let avgPath = new Path();
+  avgPath.move(new Point(padLeft, avgY));
+  avgPath.addLine(new Point(w - padRight, avgY));
+  ctx.addPath(avgPath);
+  ctx.setStrokeColor(new Color("#FFA500", 0.7)); // Orange for average
+  ctx.setLineWidth(1);
+  // Manual Dash for Avg Line (dotted style) to differ from peak
+  // Actually DrawContext doesn't support dash style easily on path without manual loop, 
+  // but let's just use a solid thin line with opacity for simplicity as we already have manual dash loops above
+  // or we can reuse the manual loop if we want dashes. Let's do a simple solid line for now for clarity.
+  ctx.strokePath();
+
   // Labels
   ctx.setTextColor(Color.white());
   ctx.setFont(Font.systemFont(18));
 
-  // Y-Labels (Min / Max)
+  // Y-Labels (Min / Max / Avg)
   ctx.drawText(Math.round(max).toString(), new Point(0, padTop - 10));
   ctx.drawText(Math.round(min).toString(), new Point(0, h - padBottom - 10));
 
-  // X-Labels
+  // Avg Label on Y-axis (Left)
+  ctx.setTextColor(new Color("#FFA500"));
+  ctx.setFont(Font.boldSystemFont(16)); // Larger font
+  // Position it near the avg line on the left axis area
+  // We need space for 2 lines. 16pt font needs more vertical space.
+  // Block height approx 36pt. Center it on avgY.
+  let avgLabelY = Math.max(padTop, Math.min(avgY - 18, h - padBottom - 40));
+
+  ctx.drawText("Avg:", new Point(0, avgLabelY));
+  ctx.drawText(avg.toFixed(2), new Point(0, avgLabelY + 18));
+
+  ctx.setTextColor(Color.white());
+  ctx.setFont(Font.systemFont(18));
+
+  // X-Labels (Fixed 00:00 - 23:30)
   let yLabelPos = h - padBottom + 5;
 
   if (data.length > 0) {
-    let tStart = formatTime(data[0].valid_from);
-    let tEnd = formatTime(data[data.length - 1].valid_from);
-
-    ctx.drawText(tStart, new Point(padLeft, yLabelPos));
-    ctx.drawText(tEnd, new Point(w - padRight - 50, yLabelPos));
+    ctx.drawText("00:00", new Point(padLeft, yLabelPos));
+    ctx.drawText("23:30", new Point(w - padRight - 50, yLabelPos));
 
     // Peak Labels
     if (peakStartIdx !== -1 && peakStartIdx !== peakEndIdx) {
       let startTime = formatTime(data[peakStartIdx].valid_from);
-      // Use valid_to for the end time label (e.g. 19:00 instead of 18:30)
       let endTime = formatTime(data[peakEndIdx].valid_to);
 
-      // Simple collision avoidance with start/end labels
-      // If peak is too close to start/end, don't draw label or offset it
-      // For simplicity, we just draw them at the x position
-      ctx.drawText(startTime, new Point(getX(peakStartIdx) - 20, yLabelPos));
+      let startD = new Date(data[peakStartIdx].valid_from);
+      let startSlot = startD.getHours() * 2 + (startD.getMinutes() >= 30 ? 1 : 0);
+      let startX = getX(startSlot);
+
+      let endD = new Date(data[peakEndIdx].valid_to);
+      let endSlot = endD.getHours() * 2 + (endD.getMinutes() >= 30 ? 1 : 0);
+      if (endSlot === 0 && endD.getDate() !== startD.getDate()) endSlot = 48;
+
+      let endX = (endSlot >= totalSlots) ? (w - padRight) : getX(endSlot);
+
+      // Simple collision avoidance
+      ctx.drawText(startTime, new Point(startX - 20, yLabelPos));
 
       // Draw peak end label
-      if (peakEndIdx + 1 < data.length) {
-        ctx.drawText(endTime, new Point(getX(peakEndIdx + 1) - 20, yLabelPos));
+      if (endX < w - padRight) {
+        ctx.drawText(endTime, new Point(endX - 20, yLabelPos));
       } else {
         ctx.drawText(endTime, new Point(w - padRight - 30, yLabelPos));
       }
@@ -506,6 +559,7 @@ if (now.getMinutes() < 30) {
   refreshDate.setMinutes(0, 5, 0);
 }
 widget.refreshAfterDate = refreshDate;
+console.log("Next refresh scheduled for: " + refreshDate.toLocaleTimeString());
 
 if (config.runsInWidget) {
   Script.setWidget(widget);
