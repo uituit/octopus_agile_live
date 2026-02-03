@@ -371,6 +371,7 @@ function drawChart(data, min, max) {
   // Draw Line
   let path = new Path();
   let first = true;
+  let prevPt = null;
 
   for (let i = 0; i < data.length; i++) {
     // Calculate slot index based on time 00:00 - 23:30
@@ -381,12 +382,42 @@ function drawChart(data, min, max) {
     if (slotIndex >= totalSlots) slotIndex = totalSlots - 1;
 
     let pt = new Point(getX(slotIndex), getY(data[i].value_inc_vat));
+
     if (first) {
       path.move(pt);
       first = false;
     } else {
+      // Step Chart Logic:
+      // 1. Draw Horizontal line from PrevPt to current X (maintaining PrevPt Y)
+      // 2. Draw Vertical line from current X (PrevPt Y) to current Pt
+      // Note: Data is discrete slots. 
+      // Point A is the START of slot A. Point B is the START of slot B.
+      // So the price of Slot A extends until the start of Slot B.
+      // Therefore: Horizontal from A to (B.x, A.y), then Vertical to B.
+      let midPt = new Point(pt.x, prevPt.y);
+      path.addLine(midPt);
       path.addLine(pt);
     }
+    prevPt = pt;
+  }
+
+  // Extend the last point horizontally to the end of the slot width
+  // Because the last point represents the updated price for the LAST slot, 
+  // it should stay constant until the end of that slot.
+  if (prevPt) {
+    // We are plotting indexed points. Point N corresponds to start of slot N.
+    // We need to draw the line for slot N from slot N start to slot N end (slot N+1 start).
+    // The loop connects N-1 to N.
+    // We need to finish by drawing N.
+    // Calculate X for "next slot" (which might be off graph right edge)
+    let lastSlotIndex = (totalSlots > 0) ? (prevPt.x - padLeft) / graphW * (totalSlots - 1) : 0;
+    // Rough calculation back from X, but cleaner to just use next step width
+    let stepWidth = graphW / (totalSlots - 1);
+    let endPt = new Point(prevPt.x + stepWidth, prevPt.y);
+
+    // Only add if it's within visual bounds or clamp it
+    // Usually we want to see the flat line for the last price
+    path.addLine(endPt);
   }
 
   ctx.addPath(path);
